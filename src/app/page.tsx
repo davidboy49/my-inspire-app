@@ -57,6 +57,10 @@ export default function InspireApp() {
   const [pages, setPages] = useState<Page[]>([]);
   const [selectedNotebook, setSelectedNotebook] = useState<string | null>(null);
   const [selectedPage, setSelectedPage] = useState<string | null>(null);
+  const [renamingNotebookId, setRenamingNotebookId] = useState<string | null>(null);
+  const [renamingNotebookName, setRenamingNotebookName] = useState('');
+  const [renamingPageId, setRenamingPageId] = useState<string | null>(null);
+  const [renamingPageTitle, setRenamingPageTitle] = useState('');
 
   const [theme, setTheme] = useState<'light' | 'dark' | 'reader'>('light');
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -86,7 +90,7 @@ export default function InspireApp() {
   const loadNotebooks = useCallback((userId: string) => {
     const q = query(collection(db, 'notebooks'), where('userId', '==', userId));
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
+    return onSnapshot(q, (snapshot) => {
       const loadedNotebooks: Notebook[] = [];
       snapshot.forEach((doc) => {
         loadedNotebooks.push({
@@ -95,16 +99,14 @@ export default function InspireApp() {
         } as Notebook);
       });
       setNotebooks(loadedNotebooks);
-      if (loadedNotebooks.length > 0 && !selectedNotebook) {
-        setSelectedNotebook(loadedNotebooks[0].id);
-      }
+      setSelectedNotebook((current) => current || loadedNotebooks[0]?.id || null);
     });
-
-    return unsubscribe;
-  }, [selectedNotebook]);
+  }, []);
 
   // Auth state listener
   useEffect(() => {
+    let notebooksUnsubscribe: (() => void) | undefined;
+
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       if (currentUser) {
         setUser({
@@ -113,8 +115,10 @@ export default function InspireApp() {
           displayName: currentUser.displayName || (currentUser.email ? currentUser.email.split('@')[0] : 'Creator'),
           photoURL: currentUser.photoURL
         });
-        loadNotebooks(currentUser.uid);
+        notebooksUnsubscribe?.();
+        notebooksUnsubscribe = loadNotebooks(currentUser.uid);
       } else {
+        notebooksUnsubscribe?.();
         setUser(null);
         setNotebooks([]);
         setPages([]);
@@ -122,7 +126,10 @@ export default function InspireApp() {
       setLoading(false);
     });
 
-    return () => unsubscribe();
+    return () => {
+      unsubscribe();
+      notebooksUnsubscribe?.();
+    };
   }, [loadNotebooks]);
 
   // Load pages for selected notebook
@@ -229,6 +236,8 @@ export default function InspireApp() {
     setHighlightType(page.highlightType || 'none');
     setNumbered(!!page.numbered);
     setEditingPageId(null);
+    setRenamingPageId(null);
+    setRenamingPageTitle('');
   };
 
   // Save page content
@@ -254,6 +263,8 @@ export default function InspireApp() {
         setPageContent('');
         setHighlightType('none');
         setNumbered(false);
+        setRenamingPageId(null);
+        setRenamingPageTitle('');
       }
     } catch (err) {
       setErrorMessage(err);
@@ -303,6 +314,18 @@ export default function InspireApp() {
     }
   };
 
+  const renamePage = async () => {
+    if (!renamingPageId || !renamingPageTitle.trim()) return;
+
+    try {
+      await updateDoc(doc(db, 'pages', renamingPageId), { title: renamingPageTitle.trim() });
+      setRenamingPageId(null);
+      setRenamingPageTitle('');
+    } catch (err) {
+      setErrorMessage(err);
+    }
+  };
+
   // Delete notebook
   const deleteNotebook = async (id: string) => {
     try {
@@ -312,6 +335,18 @@ export default function InspireApp() {
         setSelectedPage(null);
         setPageContent('');
       }
+    } catch (err) {
+      setErrorMessage(err);
+    }
+  };
+
+  const renameNotebook = async () => {
+    if (!renamingNotebookId || !renamingNotebookName.trim()) return;
+
+    try {
+      await updateDoc(doc(db, 'notebooks', renamingNotebookId), { name: renamingNotebookName.trim() });
+      setRenamingNotebookId(null);
+      setRenamingNotebookName('');
     } catch (err) {
       setErrorMessage(err);
     }
@@ -491,7 +526,7 @@ export default function InspireApp() {
             {notebooks.map((nb) => (
               <div key={nb.id} className="group">
                 <button
-                  onClick={() => setSelectedNotebook(nb.id)}
+                  onClick={() => { setSelectedNotebook(nb.id); setRenamingNotebookId(null); setRenamingNotebookName(''); }}
                   className={`w-full text-left px-3 py-2 rounded flex items-center gap-2 transition ${
                     selectedNotebook === nb.id
                       ? themed('bg-purple-500/20 text-purple-400', 'bg-purple-100 text-purple-700', 'bg-[#e8dcaf] text-[#5c4b21]')
@@ -502,12 +537,44 @@ export default function InspireApp() {
                   {sidebarOpen && <span className="truncate text-sm">{nb.name}</span>}
                 </button>
                 {sidebarOpen && selectedNotebook === nb.id && (
-                  <button
-                    onClick={() => deleteNotebook(nb.id)}
-                    className={`w-full text-left px-3 py-1 text-xs rounded opacity-0 group-hover:opacity-100 ${themed('text-red-400 hover:bg-red-500/10', 'text-red-600 hover:bg-red-100', 'text-[#8c1d18] hover:bg-[#f4d0c8]')}`}
-                  >
-                    Delete
-                  </button>
+                  <div className="flex gap-2 px-3 py-1 text-xs opacity-0 group-hover:opacity-100">
+                    {renamingNotebookId === nb.id ? (
+                      <div className="flex gap-1 w-full">
+                        <input
+                          value={renamingNotebookName}
+                          onChange={(e) => setRenamingNotebookName(e.target.value)}
+                          className={`flex-1 rounded px-2 py-1 border ${themed('bg-slate-800 border-slate-600 text-white', 'bg-white border-gray-300', 'bg-[#f8f1d9] border-[#e4d8b4] text-[#2d2a32]')}`}
+                        />
+                        <button
+                          onClick={renameNotebook}
+                          className="px-2 py-1 rounded bg-green-500 text-white"
+                        >
+                          Save
+                        </button>
+                        <button
+                          onClick={() => { setRenamingNotebookId(null); setRenamingNotebookName(''); }}
+                          className={`px-2 py-1 rounded ${themed('bg-slate-700 text-slate-200', 'bg-gray-200', 'bg-[#eadfb8] text-[#2d2a32]')}`}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    ) : (
+                      <>
+                        <button
+                          onClick={() => { setRenamingNotebookId(nb.id); setRenamingNotebookName(nb.name); }}
+                          className={`flex-1 rounded text-left ${themed('hover:bg-slate-700 text-slate-300', 'hover:bg-gray-100', 'hover:bg-[#eadfb8] text-[#4a4534]')}`}
+                        >
+                          Rename
+                        </button>
+                        <button
+                          onClick={() => deleteNotebook(nb.id)}
+                          className={`flex-1 rounded text-left ${themed('text-red-400 hover:bg-red-500/10', 'text-red-600 hover:bg-red-100', 'text-[#8c1d18] hover:bg-[#f4d0c8]')}`}
+                        >
+                          Delete
+                        </button>
+                      </>
+                    )}
+                  </div>
                 )}
               </div>
             ))}
@@ -587,15 +654,18 @@ export default function InspireApp() {
                 <option value="reader">Reading</option>
               </select>
             </div>
-            <div className="flex items-center gap-2 px-3 py-2 rounded-lg border border-purple-200 bg-purple-50">
+            <div className={`flex items-center gap-2 px-3 py-2 rounded-lg border ${themed('border-slate-700 bg-slate-800', 'border-gray-200 bg-white', 'border-[#e4d8b4] bg-[#f8f1d9]')}`}>
               {user.photoURL ? (
-                <Image src={user.photoURL} alt={user.displayName} width={32} height={32} className="rounded-full object-cover" />
+                <Image src={user.photoURL} alt={user.displayName} width={36} height={36} className="rounded-full object-cover border border-purple-200" />
               ) : (
-                <div className="w-8 h-8 rounded-full bg-purple-500 text-white flex items-center justify-center font-semibold">
+                <div className="w-9 h-9 rounded-full bg-gradient-to-br from-purple-500 to-pink-500 text-white flex items-center justify-center font-semibold">
                   {user.displayName.charAt(0).toUpperCase()}
                 </div>
               )}
-              <span className="text-sm text-purple-700">{user.email}</span>
+              <div className="leading-tight">
+                <p className={`text-sm font-semibold ${themed('text-white', 'text-gray-900', 'text-[#2d2a32]')}`}>{user.displayName}</p>
+                <p className={`text-xs ${themed('text-slate-400', 'text-gray-500', 'text-[#5c4b21]')}`}>{user.email}</p>
+              </div>
             </div>
             <button
               onClick={handleLogout}
@@ -659,8 +729,38 @@ export default function InspireApp() {
               {selectedPage && currentPage ? (
                 <>
                   <div className={`${themed('bg-slate-800 border-b border-slate-700', 'bg-white border-b border-gray-200', 'bg-[#f8f1d9] border-b border-[#e4d8b4]')} px-6 py-4 flex items-center justify-between`}>
-                    <div>
-                      <h2 className={`text-xl font-semibold ${themed('text-white', 'text-gray-900', 'text-[#2d2a32]')}`}>{currentPage.title}</h2>
+                    <div className="space-y-1">
+                      {renamingPageId === currentPage.id ? (
+                        <div className="flex items-center gap-2">
+                          <input
+                            value={renamingPageTitle}
+                            onChange={(e) => setRenamingPageTitle(e.target.value)}
+                            className={`text-xl font-semibold rounded px-2 py-1 border ${themed('bg-slate-900 border-slate-700 text-white', 'bg-white border-gray-300 text-gray-900', 'bg-[#f8f1d9] border-[#e4d8b4] text-[#2d2a32]')}`}
+                          />
+                          <button
+                            onClick={renamePage}
+                            className="px-3 py-1 text-sm rounded bg-green-500 text-white"
+                          >
+                            Save
+                          </button>
+                          <button
+                            onClick={() => { setRenamingPageId(null); setRenamingPageTitle(''); }}
+                            className={`px-3 py-1 text-sm rounded ${themed('bg-slate-700 text-slate-200', 'bg-gray-200', 'bg-[#eadfb8] text-[#2d2a32]')}`}
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-3">
+                          <h2 className={`text-xl font-semibold ${themed('text-white', 'text-gray-900', 'text-[#2d2a32]')}`}>{currentPage.title || 'Untitled'}</h2>
+                          <button
+                            onClick={() => { setRenamingPageId(currentPage.id); setRenamingPageTitle(currentPage.title || ''); }}
+                            className={`px-3 py-1 text-xs rounded ${themed('bg-slate-700 text-slate-200 hover:bg-slate-600', 'bg-gray-200 hover:bg-gray-300', 'bg-[#eadfb8] text-[#2d2a32] hover:bg-[#e1d59d]')}`}
+                          >
+                            Rename
+                          </button>
+                        </div>
+                      )}
                       <p className={`text-xs ${themed('text-slate-400', 'text-gray-500', 'text-[#5c4b21]')}`}>Created on {currentPage.timestamp}</p>
                     </div>
                     <div className="flex items-center gap-2">
