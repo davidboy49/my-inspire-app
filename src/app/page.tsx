@@ -1,83 +1,226 @@
 "use client"
 
-import React, { useState } from 'react';
-import { Heart, LogOut, Sparkles, Copy, Check } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Heart, LogOut, Sparkles, Copy, Check, Loader } from 'lucide-react';
+import { 
+  signInWithEmailAndPassword, 
+  createUserWithEmailAndPassword,
+  signOut,
+  onAuthStateChanged,
+  signInWithPopup,
+  GoogleAuthProvider
+} from 'firebase/auth';
+import { 
+  collection, 
+  addDoc, 
+  query, 
+  where, 
+  onSnapshot,
+  deleteDoc,
+  doc,
+  updateDoc,
+  getDocs
+} from 'firebase/firestore';
+import { auth, db } from './firebase';
 
 interface User {
-  email: string;
+  email: string | null;
   id: string;
 }
 
 interface Note {
-  id: number;
+  id: string;
   text: string;
   timestamp: string;
   liked: boolean;
+  userId: string;
 }
 
 export default function InspireApp() {
   const [user, setUser] = useState<User | null>(null);
   const [notes, setNotes] = useState<Note[]>([]);
   const [newNote, setNewNote] = useState('');
-  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [editText, setEditText] = useState('');
-  const [copied, setCopied] = useState<number | null>(null);
+  const [copied, setCopied] = useState<string | null>(null);
   const [darkMode, setDarkMode] = useState(true);
   const [showAuthForm, setShowAuthForm] = useState(false);
   const [authMode, setAuthMode] = useState('login');
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [authLoading, setAuthLoading] = useState(false);
+  const [error, setError] = useState('');
 
-  const handleAuth = () => {
-    if (authEmail && authPassword) {
-      setUser({ email: authEmail, id: Math.random().toString() });
+  // Auth state listener
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      if (currentUser) {
+        setUser({
+          email: currentUser.email,
+          id: currentUser.uid
+        });
+        loadNotes(currentUser.uid);
+      } else {
+        setUser(null);
+        setNotes([]);
+      }
+      setLoading(false);
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  // Load notes from Firestore
+  const loadNotes = (userId: string) => {
+    const q = query(collection(db, 'notes'), where('userId', '==', userId));
+    
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const loadedNotes: Note[] = [];
+      snapshot.forEach((doc) => {
+        loadedNotes.push({
+          id: doc.id,
+          ...doc.data()
+        } as Note);
+      });
+      setNotes(loadedNotes.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()));
+    });
+
+    return unsubscribe;
+  };
+
+  // Email/Password Sign Up
+  const handleSignUp = async () => {
+    if (!authEmail || !authPassword) {
+      setError('Please fill in all fields');
+      return;
+    }
+    
+    setAuthLoading(true);
+    setError('');
+    
+    try {
+      await createUserWithEmailAndPassword(auth, authEmail, authPassword);
       setAuthEmail('');
       setAuthPassword('');
       setShowAuthForm(false);
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setAuthLoading(false);
     }
   };
 
-  const handleLogout = () => {
-    setUser(null);
-    setNotes([]);
+  // Email/Password Login
+  const handleLogin = async () => {
+    if (!authEmail || !authPassword) {
+      setError('Please fill in all fields');
+      return;
+    }
+    
+    setAuthLoading(true);
+    setError('');
+    
+    try {
+      await signInWithEmailAndPassword(auth, authEmail, authPassword);
+      setAuthEmail('');
+      setAuthPassword('');
+      setShowAuthForm(false);
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setAuthLoading(false);
+    }
   };
 
-  const addNote = () => {
-    if (newNote.trim()) {
-      const note: Note = {
-        id: Date.now(),
+  // Google Sign In
+  const handleGoogleSignIn = async () => {
+    setAuthLoading(true);
+    setError('');
+    
+    try {
+      const provider = new GoogleAuthProvider();
+      await signInWithPopup(auth, provider);
+      setShowAuthForm(false);
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await signOut(auth);
+    } catch (err: any) {
+      setError(err.message);
+    }
+  };
+
+  // Add Note
+  const addNote = async () => {
+    if (!newNote.trim() || !user) return;
+
+    try {
+      await addDoc(collection(db, 'notes'), {
         text: newNote,
         timestamp: new Date().toLocaleDateString(),
-        liked: false
-      };
-      setNotes([note, ...notes]);
+        liked: false,
+        userId: user.id
+      });
       setNewNote('');
+    } catch (err: any) {
+      setError(err.message);
     }
   };
 
-  const deleteNote = (id: number) => {
-    setNotes(notes.filter(n => n.id !== id));
+  // Delete Note
+  const deleteNote = async (id: string) => {
+    try {
+      await deleteDoc(doc(db, 'notes', id));
+    } catch (err: any) {
+      setError(err.message);
+    }
   };
 
-  const toggleLike = (id: number) => {
-    setNotes(notes.map(n => n.id === id ? { ...n, liked: !n.liked } : n));
+  // Toggle Like
+  const toggleLike = async (id: string, currentLiked: boolean) => {
+    try {
+      await updateDoc(doc(db, 'notes', id), {
+        liked: !currentLiked
+      });
+    } catch (err: any) {
+      setError(err.message);
+    }
   };
 
-  const startEdit = (id: number, text: string) => {
-    setEditingId(id);
-    setEditText(text);
+  // Save Edit
+  const saveEdit = async (id: string) => {
+    if (!editText.trim()) return;
+
+    try {
+      await updateDoc(doc(db, 'notes', id), {
+        text: editText
+      });
+      setEditingId(null);
+    } catch (err: any) {
+      setError(err.message);
+    }
   };
 
-  const saveEdit = (id: number) => {
-    setNotes(notes.map(n => n.id === id ? { ...n, text: editText } : n));
-    setEditingId(null);
-  };
-
-  const copyToClipboard = (text: string, id: number) => {
+  const copyToClipboard = (text: string, id: string) => {
     navigator.clipboard.writeText(text);
     setCopied(id);
     setTimeout(() => setCopied(null), 2000);
   };
+
+  if (loading) {
+    return (
+      <div className={`min-h-screen flex items-center justify-center ${darkMode ? 'bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900' : 'bg-gradient-to-br from-blue-50 via-purple-50 to-pink-50'}`}>
+        <Loader className="w-8 h-8 text-purple-400 animate-spin" />
+      </div>
+    );
+  }
 
   if (!user) {
     return (
@@ -85,9 +228,7 @@ export default function InspireApp() {
         <div className="w-full max-w-md mx-4">
           <div className="text-center mb-8">
             <div className="flex justify-center mb-4">
-              <div className="relative">
-                <Sparkles className="w-12 h-12 text-purple-400 animate-spin" style={{animationDuration: '3s'}} />
-              </div>
+              <Sparkles className="w-12 h-12 text-purple-400 animate-spin" style={{animationDuration: '3s'}} />
             </div>
             <h1 className={`text-4xl font-bold mb-2 ${darkMode ? 'text-white' : 'text-gray-900'}`}>
               Inspire
@@ -106,9 +247,16 @@ export default function InspireApp() {
             </button>
           ) : (
             <div className={`p-6 rounded-lg ${darkMode ? 'bg-slate-800' : 'bg-white'} shadow-2xl`}>
-              <h2 className={`text-2xl font-bold mb-6 ${darkMode ? 'text-white' : 'text-gray-900'}`}>
+              <h2 className={`text-2xl font-bold mb-4 ${darkMode ? 'text-white' : 'text-gray-900'}`}>
                 {authMode === 'login' ? 'Log In' : 'Sign Up'}
               </h2>
+
+              {error && (
+                <div className="mb-4 p-3 bg-red-500/20 text-red-400 rounded text-sm">
+                  {error}
+                </div>
+              )}
+
               <input
                 type="email"
                 placeholder="Email"
@@ -124,14 +272,33 @@ export default function InspireApp() {
                 className={`w-full px-4 py-2 mb-6 rounded border-2 ${darkMode ? 'bg-slate-700 border-slate-600 text-white' : 'bg-gray-100 border-gray-300'} focus:outline-none focus:border-purple-500`}
               />
               <button
-                onClick={handleAuth}
-                className="w-full bg-purple-500 hover:bg-purple-600 text-white font-bold py-2 rounded mb-4 transition"
+                onClick={authMode === 'login' ? handleLogin : handleSignUp}
+                disabled={authLoading}
+                className="w-full bg-purple-500 hover:bg-purple-600 text-white font-bold py-2 rounded mb-4 transition disabled:opacity-50"
               >
-                {authMode === 'login' ? 'Log In' : 'Sign Up'}
+                {authLoading ? 'Loading...' : (authMode === 'login' ? 'Log In' : 'Sign Up')}
               </button>
+
+              <div className="relative mb-4">
+                <div className="absolute inset-0 flex items-center">
+                  <div className={`w-full border-t ${darkMode ? 'border-slate-600' : 'border-gray-300'}`}></div>
+                </div>
+                <div className="relative flex justify-center text-sm">
+                  <span className={`px-2 ${darkMode ? 'bg-slate-800 text-slate-400' : 'bg-white text-gray-500'}`}>Or</span>
+                </div>
+              </div>
+
+              <button
+                onClick={handleGoogleSignIn}
+                disabled={authLoading}
+                className={`w-full py-2 rounded mb-4 transition disabled:opacity-50 flex items-center justify-center gap-2 ${darkMode ? 'bg-slate-700 hover:bg-slate-600 text-white' : 'bg-gray-200 hover:bg-gray-300'}`}
+              >
+                <span>🔵</span> Sign in with Google
+              </button>
+
               <button
                 onClick={() => setAuthMode(authMode === 'login' ? 'signup' : 'login')}
-                className={`w-full py-2 text-sm ${darkMode ? 'text-purple-300' : 'text-purple-600'} hover:underline`}
+                className={`w-full py-2 text-sm ${darkMode ? 'text-purple-300 hover:text-purple-200' : 'text-purple-600 hover:text-purple-700'} hover:underline`}
               >
                 {authMode === 'login' ? 'Create account' : 'Log in instead'}
               </button>
@@ -174,9 +341,15 @@ export default function InspireApp() {
         {/* Welcome Card */}
         <div className={`mb-8 p-6 rounded-xl ${darkMode ? 'bg-gradient-to-r from-purple-500/20 to-pink-500/20 border border-purple-500/30' : 'bg-gradient-to-r from-purple-100 to-pink-100 border border-purple-200'}`}>
           <p className={darkMode ? 'text-purple-100' : 'text-purple-900'}>
-            Welcome back, <span className="font-semibold">{user.email.split('@')[0]}</span>! ✨
+            Welcome back, <span className="font-semibold">{user.email?.split('@')[0]}</span>! ✨
           </p>
         </div>
+
+        {error && (
+          <div className="mb-4 p-4 bg-red-500/20 text-red-400 rounded">
+            {error}
+          </div>
+        )}
 
         {/* Input Section */}
         <div className={`mb-8 p-6 rounded-xl ${darkMode ? 'bg-slate-800/50 border border-slate-700' : 'bg-white/50 border border-gray-200'}`}>
@@ -253,14 +426,17 @@ export default function InspireApp() {
                           {copied === note.id ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
                         </button>
                         <button
-                          onClick={() => startEdit(note.id, note.text)}
+                          onClick={() => {
+                            setEditingId(note.id);
+                            setEditText(note.text);
+                          }}
                           className={`p-2 rounded transition ${darkMode ? 'hover:bg-slate-700 text-slate-400' : 'hover:bg-gray-200 text-gray-500'}`}
                           title="Edit"
                         >
                           ✏️
                         </button>
                         <button
-                          onClick={() => toggleLike(note.id)}
+                          onClick={() => toggleLike(note.id, note.liked)}
                           className={`p-2 rounded transition ${note.liked ? 'text-red-500' : darkMode ? 'text-slate-400 hover:text-red-500' : 'text-gray-500 hover:text-red-500'}`}
                         >
                           <Heart className={`w-4 h-4 ${note.liked ? 'fill-current' : ''}`} />
