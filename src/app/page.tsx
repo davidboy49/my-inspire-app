@@ -82,6 +82,27 @@ export default function InspireApp() {
   const colors = ['bg-blue-500', 'bg-purple-500', 'bg-pink-500', 'bg-green-500', 'bg-orange-500'];
   const [selectedColor, setSelectedColor] = useState(colors[0]);
 
+  // Load notebooks
+  const loadNotebooks = useCallback((userId: string) => {
+    const q = query(collection(db, 'notebooks'), where('userId', '==', userId));
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const loadedNotebooks: Notebook[] = [];
+      snapshot.forEach((doc) => {
+        loadedNotebooks.push({
+          id: doc.id,
+          ...doc.data()
+        } as Notebook);
+      });
+      setNotebooks(loadedNotebooks);
+      if (loadedNotebooks.length > 0 && !selectedNotebook) {
+        setSelectedNotebook(loadedNotebooks[0].id);
+      }
+    });
+
+    return unsubscribe;
+  }, [selectedNotebook]);
+
   // Auth state listener
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
@@ -103,27 +124,6 @@ export default function InspireApp() {
 
     return () => unsubscribe();
   }, [loadNotebooks]);
-
-  // Load notebooks
-  const loadNotebooks = useCallback((userId: string) => {
-    const q = query(collection(db, 'notebooks'), where('userId', '==', userId));
-
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const loadedNotebooks: Notebook[] = [];
-      snapshot.forEach((doc) => {
-        loadedNotebooks.push({
-          id: doc.id,
-          ...doc.data()
-        } as Notebook);
-      });
-      setNotebooks(loadedNotebooks);
-      if (loadedNotebooks.length > 0 && !selectedNotebook) {
-        setSelectedNotebook(loadedNotebooks[0].id);
-      }
-    });
-
-    return unsubscribe;
-  }, [selectedNotebook]);
 
   // Load pages for selected notebook
   useEffect(() => {
