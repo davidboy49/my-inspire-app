@@ -1,7 +1,8 @@
 "use client"
 
-import React, { useState, useEffect } from 'react';
-import { Heart, LogOut, Sparkles, Copy, Check, Loader, Plus, Archive, Trash2, ChevronDown, Menu, X, Edit2, FolderPlus } from 'lucide-react';
+import React, { useState, useEffect, useCallback } from 'react';
+import Image from 'next/image';
+import { Heart, LogOut, Sparkles, Copy, Check, Loader, Plus, Archive, Trash2, Menu, X } from 'lucide-react';
 import { 
   signInWithEmailAndPassword, 
   createUserWithEmailAndPassword,
@@ -25,6 +26,8 @@ import { auth, db } from './firebase';
 interface User {
   email: string | null;
   id: string;
+  displayName: string;
+  photoURL: string | null;
 }
 
 interface Notebook {
@@ -44,6 +47,8 @@ interface Page {
   timestamp: string;
   liked: boolean;
   archived: boolean;
+  highlightType?: 'todo' | 'notTodo' | 'none';
+  numbered?: boolean;
 }
 
 export default function InspireApp() {
@@ -52,8 +57,8 @@ export default function InspireApp() {
   const [pages, setPages] = useState<Page[]>([]);
   const [selectedNotebook, setSelectedNotebook] = useState<string | null>(null);
   const [selectedPage, setSelectedPage] = useState<string | null>(null);
-  
-  const [darkMode, setDarkMode] = useState(true);
+
+  const [theme, setTheme] = useState<'light' | 'dark' | 'reader'>('light');
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [showAuthForm, setShowAuthForm] = useState(false);
   const [authMode, setAuthMode] = useState('login');
@@ -62,42 +67,25 @@ export default function InspireApp() {
   const [loading, setLoading] = useState(true);
   const [authLoading, setAuthLoading] = useState(false);
   const [error, setError] = useState('');
+  const [khTime, setKhTime] = useState('');
   
   const [newNotebookName, setNewNotebookName] = useState('');
   const [showNewNotebook, setShowNewNotebook] = useState(false);
   const [newPageTitle, setNewPageTitle] = useState('');
   const [pageContent, setPageContent] = useState('');
   const [editingPageId, setEditingPageId] = useState<string | null>(null);
+  const [highlightType, setHighlightType] = useState<'todo' | 'notTodo' | 'none'>('none');
+  const [numbered, setNumbered] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
 
   const colors = ['bg-blue-500', 'bg-purple-500', 'bg-pink-500', 'bg-green-500', 'bg-orange-500'];
   const [selectedColor, setSelectedColor] = useState(colors[0]);
 
-  // Auth state listener
-  useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
-      if (currentUser) {
-        setUser({
-          email: currentUser.email,
-          id: currentUser.uid
-        });
-        loadNotebooks(currentUser.uid);
-      } else {
-        setUser(null);
-        setNotebooks([]);
-        setPages([]);
-      }
-      setLoading(false);
-    });
-
-    return () => unsubscribe();
-  }, []);
-
   // Load notebooks
-  const loadNotebooks = (userId: string) => {
+  const loadNotebooks = useCallback((userId: string) => {
     const q = query(collection(db, 'notebooks'), where('userId', '==', userId));
-    
+
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const loadedNotebooks: Notebook[] = [];
       snapshot.forEach((doc) => {
@@ -113,7 +101,29 @@ export default function InspireApp() {
     });
 
     return unsubscribe;
-  };
+  }, [selectedNotebook]);
+
+  // Auth state listener
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      if (currentUser) {
+        setUser({
+          email: currentUser.email,
+          id: currentUser.uid,
+          displayName: currentUser.displayName || (currentUser.email ? currentUser.email.split('@')[0] : 'Creator'),
+          photoURL: currentUser.photoURL
+        });
+        loadNotebooks(currentUser.uid);
+      } else {
+        setUser(null);
+        setNotebooks([]);
+        setPages([]);
+      }
+      setLoading(false);
+    });
+
+    return () => unsubscribe();
+  }, [loadNotebooks]);
 
   // Load pages for selected notebook
   useEffect(() => {
@@ -136,12 +146,38 @@ export default function InspireApp() {
         if (selectedPage && !loadedPages.find(p => p.id === selectedPage)) {
           setSelectedPage(null);
           setPageContent('');
+          setHighlightType('none');
+          setNumbered(false);
         }
       });
 
       return () => unsubscribe();
     }
-  }, [selectedNotebook, user]);
+  }, [selectedNotebook, selectedPage, user]);
+
+  useEffect(() => {
+    const updateTime = () => {
+      const formatter = new Intl.DateTimeFormat('en-GB', {
+        dateStyle: 'full',
+        timeStyle: 'medium',
+        timeZone: 'Asia/Bangkok'
+      });
+      setKhTime(formatter.format(new Date()));
+    };
+
+    updateTime();
+    const interval = setInterval(updateTime, 1000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const themed = (darkClass: string, lightClass: string, readerClass?: string) => {
+    if (theme === 'dark') return darkClass;
+    if (theme === 'reader') return readerClass || lightClass;
+    return lightClass;
+  };
+
+  const readerPanelClass = 'bg-[#fdf6e3] text-[#2d2a32] border-[#e4d8b4]';
+  const setErrorMessage = (err: unknown) => setError(err instanceof Error ? err.message : 'An unexpected error occurred');
 
   // Create notebook
   const createNotebook = async () => {
@@ -156,8 +192,8 @@ export default function InspireApp() {
       });
       setNewNotebookName('');
       setShowNewNotebook(false);
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err) {
+      setErrorMessage(err);
     }
   };
 
@@ -166,19 +202,23 @@ export default function InspireApp() {
     if (!newPageTitle.trim() || !selectedNotebook || !user) return;
 
     try {
-      await addDoc(collection(db, 'pages'), {
+      const docRef = await addDoc(collection(db, 'pages'), {
         title: newPageTitle,
         content: pageContent,
         notebookId: selectedNotebook,
         userId: user.id,
         timestamp: new Date().toLocaleDateString(),
         liked: false,
-        archived: false
+        archived: false,
+        highlightType,
+        numbered
       });
       setNewPageTitle('');
       setPageContent('');
-    } catch (err: any) {
-      setError(err.message);
+      setSelectedPage(docRef.id);
+      setEditingPageId(docRef.id);
+    } catch (err) {
+      setErrorMessage(err);
     }
   };
 
@@ -186,6 +226,8 @@ export default function InspireApp() {
   const selectPage = (page: Page) => {
     setSelectedPage(page.id);
     setPageContent(page.content);
+    setHighlightType(page.highlightType || 'none');
+    setNumbered(!!page.numbered);
     setEditingPageId(null);
   };
 
@@ -198,8 +240,8 @@ export default function InspireApp() {
         content: pageContent
       });
       setEditingPageId(null);
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err) {
+      setErrorMessage(err);
     }
   };
 
@@ -210,9 +252,11 @@ export default function InspireApp() {
       if (selectedPage === id) {
         setSelectedPage(null);
         setPageContent('');
+        setHighlightType('none');
+        setNumbered(false);
       }
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err) {
+      setErrorMessage(err);
     }
   };
 
@@ -222,8 +266,8 @@ export default function InspireApp() {
       await updateDoc(doc(db, 'pages', id), {
         archived: !currentArchived
       });
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err) {
+      setErrorMessage(err);
     }
   };
 
@@ -233,8 +277,29 @@ export default function InspireApp() {
       await updateDoc(doc(db, 'pages', id), {
         liked: !currentLiked
       });
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err) {
+      setErrorMessage(err);
+    }
+  };
+
+  const updateHighlight = async (type: 'todo' | 'notTodo' | 'none') => {
+    if (!selectedPage) return;
+    setHighlightType(type);
+    try {
+      await updateDoc(doc(db, 'pages', selectedPage), { highlightType: type });
+    } catch (err) {
+      setErrorMessage(err);
+    }
+  };
+
+  const toggleNumbering = async () => {
+    if (!selectedPage) return;
+    const next = !numbered;
+    setNumbered(next);
+    try {
+      await updateDoc(doc(db, 'pages', selectedPage), { numbered: next });
+    } catch (err) {
+      setErrorMessage(err);
     }
   };
 
@@ -247,8 +312,8 @@ export default function InspireApp() {
         setSelectedPage(null);
         setPageContent('');
       }
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err) {
+      setErrorMessage(err);
     }
   };
 
@@ -267,8 +332,8 @@ export default function InspireApp() {
       setAuthEmail('');
       setAuthPassword('');
       setShowAuthForm(false);
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err) {
+      setErrorMessage(err);
     } finally {
       setAuthLoading(false);
     }
@@ -288,8 +353,8 @@ export default function InspireApp() {
       setAuthEmail('');
       setAuthPassword('');
       setShowAuthForm(false);
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err) {
+      setErrorMessage(err);
     } finally {
       setAuthLoading(false);
     }
@@ -303,8 +368,8 @@ export default function InspireApp() {
       const provider = new GoogleAuthProvider();
       await signInWithPopup(auth, provider);
       setShowAuthForm(false);
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err) {
+      setErrorMessage(err);
     } finally {
       setAuthLoading(false);
     }
@@ -313,8 +378,8 @@ export default function InspireApp() {
   const handleLogout = async () => {
     try {
       await signOut(auth);
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err) {
+      setErrorMessage(err);
     }
   };
 
@@ -326,7 +391,7 @@ export default function InspireApp() {
 
   if (loading) {
     return (
-      <div className={`min-h-screen flex items-center justify-center ${darkMode ? 'bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900' : 'bg-gradient-to-br from-blue-50 via-purple-50 to-pink-50'}`}>
+      <div className={`min-h-screen flex items-center justify-center ${themed('bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900', 'bg-gradient-to-br from-blue-50 via-purple-50 to-pink-50', 'bg-gradient-to-br from-[#fdf6e3] via-[#f5deb3] to-[#f1e3c6]')}`}>
         <Loader className="w-8 h-8 text-purple-400 animate-spin" />
       </div>
     );
@@ -334,12 +399,12 @@ export default function InspireApp() {
 
   if (!user) {
     return (
-      <div className={`min-h-screen flex items-center justify-center ${darkMode ? 'bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900' : 'bg-gradient-to-br from-blue-50 via-purple-50 to-pink-50'}`}>
+      <div className={`min-h-screen flex items-center justify-center ${themed('bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900', 'bg-gradient-to-br from-blue-50 via-purple-50 to-pink-50', 'bg-gradient-to-br from-[#fdf6e3] via-[#f5deb3] to-[#f1e3c6]')}`}>
         <div className="w-full max-w-md mx-4">
           <div className="text-center mb-8">
             <Sparkles className="w-12 h-12 text-purple-400 animate-spin mx-auto mb-4" style={{animationDuration: '3s'}} />
-            <h1 className={`text-4xl font-bold mb-2 ${darkMode ? 'text-white' : 'text-gray-900'}`}>Inspire</h1>
-            <p className={darkMode ? 'text-purple-200' : 'text-purple-600'}>Capture your thoughts, fuel your creativity</p>
+            <h1 className={`text-4xl font-bold mb-2 ${themed('text-white', 'text-gray-900', 'text-[#2d2a32]')}`}>Inspire</h1>
+            <p className={themed('text-purple-200', 'text-purple-600', 'text-[#5c4b21]')}>Capture your thoughts, fuel your creativity</p>
           </div>
 
           {!showAuthForm ? (
@@ -350,8 +415,8 @@ export default function InspireApp() {
               Get Started
             </button>
           ) : (
-            <div className={`p-6 rounded-lg ${darkMode ? 'bg-slate-800' : 'bg-white'} shadow-2xl`}>
-              <h2 className={`text-2xl font-bold mb-4 ${darkMode ? 'text-white' : 'text-gray-900'}`}>
+            <div className={`p-6 rounded-lg ${themed('bg-slate-800', 'bg-white', 'bg-[#f8f1d9]')} shadow-2xl`}>
+              <h2 className={`text-2xl font-bold mb-4 ${themed('text-white', 'text-gray-900', 'text-[#2d2a32]')}`}>
                 {authMode === 'login' ? 'Log In' : 'Sign Up'}
               </h2>
               {error && <div className="mb-4 p-3 bg-red-500/20 text-red-400 rounded text-sm">{error}</div>}
@@ -360,14 +425,14 @@ export default function InspireApp() {
                 placeholder="Email"
                 value={authEmail}
                 onChange={(e) => setAuthEmail(e.target.value)}
-                className={`w-full px-4 py-2 mb-4 rounded border-2 ${darkMode ? 'bg-slate-700 border-slate-600 text-white' : 'bg-gray-100 border-gray-300'} focus:outline-none focus:border-purple-500`}
+                className={`w-full px-4 py-2 mb-4 rounded border-2 ${themed('bg-slate-700 border-slate-600 text-white', 'bg-gray-100 border-gray-300', 'bg-[#f8f1d9] border-[#e4d8b4] text-[#2d2a32]')} focus:outline-none focus:border-purple-500`}
               />
               <input
                 type="password"
                 placeholder="Password"
                 value={authPassword}
                 onChange={(e) => setAuthPassword(e.target.value)}
-                className={`w-full px-4 py-2 mb-6 rounded border-2 ${darkMode ? 'bg-slate-700 border-slate-600 text-white' : 'bg-gray-100 border-gray-300'} focus:outline-none focus:border-purple-500`}
+                className={`w-full px-4 py-2 mb-6 rounded border-2 ${themed('bg-slate-700 border-slate-600 text-white', 'bg-gray-100 border-gray-300', 'bg-[#f8f1d9] border-[#e4d8b4] text-[#2d2a32]')} focus:outline-none focus:border-purple-500`}
               />
               <button
                 onClick={authMode === 'login' ? handleLogin : handleSignUp}
@@ -378,13 +443,13 @@ export default function InspireApp() {
               </button>
               <button
                 onClick={handleGoogleSignIn}
-                className={`w-full py-2 rounded mb-4 flex items-center justify-center gap-2 ${darkMode ? 'bg-slate-700 hover:bg-slate-600 text-white' : 'bg-gray-200'}`}
+                className={`w-full py-2 rounded mb-4 flex items-center justify-center gap-2 ${themed('bg-slate-700 hover:bg-slate-600 text-white', 'bg-gray-200', 'bg-[#eadfb8] text-[#2d2a32]')}`}
               >
                 🔵 Sign in with Google
               </button>
               <button
                 onClick={() => setAuthMode(authMode === 'login' ? 'signup' : 'login')}
-                className={`w-full py-2 text-sm ${darkMode ? 'text-purple-300' : 'text-purple-600'} hover:underline`}
+                className={`w-full py-2 text-sm ${themed('text-purple-300', 'text-purple-600', 'text-[#5c4b21]')} hover:underline`}
               >
                 {authMode === 'login' ? 'Create account' : 'Log in instead'}
               </button>
@@ -395,27 +460,33 @@ export default function InspireApp() {
     );
   }
 
-  const filteredPages = showArchived 
-    ? pages.filter(p => p.archived) 
+  const filteredPages = showArchived
+    ? pages.filter(p => p.archived)
     : pages.filter(p => !p.archived);
 
   const currentPage = pages.find(p => p.id === selectedPage);
 
+  const highlightClasses = {
+    todo: themed('bg-amber-900/20 border-amber-700 text-amber-100', 'bg-amber-50 border-amber-200 text-amber-900', readerPanelClass),
+    notTodo: themed('bg-green-900/20 border-green-700 text-green-100', 'bg-green-50 border-green-200 text-green-900', 'bg-[#f2f7f1] text-[#1f3d2b] border-[#c6dfc9]'),
+    none: themed('bg-slate-800 border-slate-700 text-gray-300', 'bg-white border-gray-300 text-gray-700', readerPanelClass)
+  };
+
   return (
-    <div className={`min-h-screen flex ${darkMode ? 'bg-slate-900' : 'bg-gray-50'}`}>
+    <div className={`min-h-screen flex ${themed('bg-slate-900', 'bg-gray-50', 'bg-[#fdf6e3]')}`}>
       {/* Left Sidebar - Notebooks */}
-      <div className={`${sidebarOpen ? 'w-64' : 'w-20'} transition-all duration-300 ${darkMode ? 'bg-slate-800 border-r border-slate-700' : 'bg-white border-r border-gray-200'} flex flex-col`}>
+      <div className={`${sidebarOpen ? 'w-64' : 'w-20'} transition-all duration-300 ${themed('bg-slate-800 border-r border-slate-700', 'bg-white border-r border-gray-200', 'bg-[#f8f1d9] border-r border-[#e4d8b4]')} flex flex-col`}>
         <div className="p-4 flex items-center justify-between">
           <button
             onClick={() => setSidebarOpen(!sidebarOpen)}
-            className={`p-2 hover:bg-slate-700 rounded ${darkMode ? 'text-purple-400' : 'text-purple-600'}`}
+            className={`p-2 rounded ${themed('text-purple-400 hover:bg-slate-700', 'text-purple-600 hover:bg-gray-100', 'text-[#5c4b21] hover:bg-[#eadfb8]')}`}
           >
             {sidebarOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
           </button>
         </div>
 
         <div className={`flex-1 overflow-y-auto ${sidebarOpen ? 'px-3' : 'px-0'}`}>
-          {sidebarOpen && <p className={`text-xs font-semibold mb-2 ${darkMode ? 'text-slate-400' : 'text-gray-500'}`}>NOTEBOOKS</p>}
+          {sidebarOpen && <p className={`text-xs font-semibold mb-2 ${themed('text-slate-400', 'text-gray-500', 'text-[#5c4b21]')}`}>NOTEBOOKS</p>}
           <div className="space-y-2">
             {notebooks.map((nb) => (
               <div key={nb.id} className="group">
@@ -423,8 +494,8 @@ export default function InspireApp() {
                   onClick={() => setSelectedNotebook(nb.id)}
                   className={`w-full text-left px-3 py-2 rounded flex items-center gap-2 transition ${
                     selectedNotebook === nb.id
-                      ? darkMode ? 'bg-purple-500/20 text-purple-400' : 'bg-purple-100 text-purple-700'
-                      : darkMode ? 'hover:bg-slate-700 text-slate-300' : 'hover:bg-gray-100'
+                      ? themed('bg-purple-500/20 text-purple-400', 'bg-purple-100 text-purple-700', 'bg-[#e8dcaf] text-[#5c4b21]')
+                      : themed('hover:bg-slate-700 text-slate-300', 'hover:bg-gray-100', 'hover:bg-[#eadfb8] text-[#4a4534]')
                   }`}
                 >
                   <div className={`w-3 h-3 rounded-full ${nb.color}`}></div>
@@ -433,7 +504,7 @@ export default function InspireApp() {
                 {sidebarOpen && selectedNotebook === nb.id && (
                   <button
                     onClick={() => deleteNotebook(nb.id)}
-                    className={`w-full text-left px-3 py-1 text-xs rounded opacity-0 group-hover:opacity-100 ${darkMode ? 'text-red-400 hover:bg-red-500/10' : 'text-red-600 hover:bg-red-100'}`}
+                    className={`w-full text-left px-3 py-1 text-xs rounded opacity-0 group-hover:opacity-100 ${themed('text-red-400 hover:bg-red-500/10', 'text-red-600 hover:bg-red-100', 'text-[#8c1d18] hover:bg-[#f4d0c8]')}`}
                   >
                     Delete
                   </button>
@@ -444,11 +515,11 @@ export default function InspireApp() {
         </div>
 
         {sidebarOpen && (
-          <div className="p-3 border-t border-slate-700">
+          <div className={`p-3 ${themed('border-t border-slate-700', 'border-t border-gray-200', 'border-t border-[#e4d8b4]')}`}>
             {!showNewNotebook ? (
               <button
                 onClick={() => setShowNewNotebook(true)}
-                className={`w-full px-3 py-2 rounded flex items-center gap-2 ${darkMode ? 'bg-slate-700 hover:bg-slate-600 text-slate-200' : 'bg-gray-200 hover:bg-gray-300'}`}
+                className={`w-full px-3 py-2 rounded flex items-center gap-2 ${themed('bg-slate-700 hover:bg-slate-600 text-slate-200', 'bg-gray-200 hover:bg-gray-300', 'bg-[#eadfb8] text-[#4a4534] hover:bg-[#e1d59d]')}`}
               >
                 <Plus className="w-4 h-4" />
                 New Notebook
@@ -460,7 +531,7 @@ export default function InspireApp() {
                   placeholder="Notebook name"
                   value={newNotebookName}
                   onChange={(e) => setNewNotebookName(e.target.value)}
-                  className={`w-full px-3 py-2 rounded text-sm border-2 ${darkMode ? 'bg-slate-700 border-slate-600 text-white' : 'bg-gray-100 border-gray-300'}`}
+                  className={`w-full px-3 py-2 rounded text-sm border-2 ${themed('bg-slate-700 border-slate-600 text-white', 'bg-gray-100 border-gray-300', 'bg-[#f8f1d9] border-[#e4d8b4] text-[#2d2a32]')}`}
                 />
                 <div className="flex gap-2">
                   {colors.map((color) => (
@@ -480,7 +551,7 @@ export default function InspireApp() {
                   </button>
                   <button
                     onClick={() => setShowNewNotebook(false)}
-                    className={`flex-1 px-3 py-1 rounded text-sm ${darkMode ? 'bg-slate-700 hover:bg-slate-600' : 'bg-gray-200'}`}
+                    className={`flex-1 px-3 py-1 rounded text-sm ${themed('bg-slate-700 hover:bg-slate-600', 'bg-gray-200', 'bg-[#eadfb8]')}`}
                   >
                     Cancel
                   </button>
@@ -494,18 +565,38 @@ export default function InspireApp() {
       {/* Main Content */}
       <div className="flex-1 flex flex-col">
         {/* Header */}
-        <header className={`${darkMode ? 'bg-slate-800 border-b border-slate-700' : 'bg-white border-b border-gray-200'} px-6 py-4 flex items-center justify-between`}>
+        <header className={`${themed('bg-slate-800 border-b border-slate-700', 'bg-white border-b border-gray-200', 'bg-[#f8f1d9] border-b border-[#e4d8b4]')} px-6 py-4 flex items-center justify-between`}>
           <div className="flex items-center gap-3">
             <Sparkles className="w-6 h-6 text-purple-400" />
-            <h1 className={`text-2xl font-bold ${darkMode ? 'text-white' : 'text-gray-900'}`}>Inspire</h1>
+            <div>
+              <h1 className={`text-2xl font-bold ${themed('text-white', 'text-gray-900', 'text-[#2d2a32]')}`}>Inspire</h1>
+              <p className={`text-sm ${themed('text-slate-400', 'text-gray-500', 'text-[#5c4b21]')}`}>Welcome back, {user.displayName}</p>
+              <p className={`text-xs ${themed('text-slate-500', 'text-gray-400', 'text-[#7a6f4b]')}`}>{khTime} (UTC+7)</p>
+            </div>
           </div>
           <div className="flex items-center gap-3">
-            <button
-              onClick={() => setDarkMode(!darkMode)}
-              className={`p-2 rounded-lg ${darkMode ? 'bg-slate-700' : 'bg-gray-200'}`}
-            >
-              {darkMode ? '☀️' : '🌙'}
-            </button>
+            <div className={`px-3 py-2 rounded-lg flex items-center gap-2 ${themed('bg-slate-700', 'bg-gray-100', 'bg-[#eadfb8]')}`}>
+              <label className={`text-xs ${themed('text-slate-300', 'text-gray-700', 'text-[#5c4b21]')}`}>Theme</label>
+              <select
+                value={theme}
+                onChange={(e) => setTheme(e.target.value as 'light' | 'dark' | 'reader')}
+                className={`text-sm rounded px-2 py-1 ${themed('bg-slate-800 text-white', 'bg-white text-gray-900', 'bg-[#f8f1d9] text-[#2d2a32] border border-[#e4d8b4]')}`}
+              >
+                <option value="light">Light</option>
+                <option value="dark">Dark</option>
+                <option value="reader">Reading</option>
+              </select>
+            </div>
+            <div className="flex items-center gap-2 px-3 py-2 rounded-lg border border-purple-200 bg-purple-50">
+              {user.photoURL ? (
+                <Image src={user.photoURL} alt={user.displayName} width={32} height={32} className="rounded-full object-cover" />
+              ) : (
+                <div className="w-8 h-8 rounded-full bg-purple-500 text-white flex items-center justify-center font-semibold">
+                  {user.displayName.charAt(0).toUpperCase()}
+                </div>
+              )}
+              <span className="text-sm text-purple-700">{user.email}</span>
+            </div>
             <button
               onClick={handleLogout}
               className="flex items-center gap-2 px-4 py-2 rounded-lg bg-red-500/20 text-red-400 hover:bg-red-500/30"
@@ -519,19 +610,26 @@ export default function InspireApp() {
         {selectedNotebook ? (
           <div className="flex-1 flex overflow-hidden">
             {/* Pages List - Middle */}
-            <div className={`w-64 ${darkMode ? 'bg-slate-800 border-r border-slate-700' : 'bg-gray-100 border-r border-gray-200'} flex flex-col overflow-hidden`}>
-              <div className="p-4 border-b border-slate-700">
+            <div className={`w-64 ${themed('bg-slate-800 border-r border-slate-700', 'bg-gray-100 border-r border-gray-200', 'bg-[#f8f1d9] border-r border-[#e4d8b4]')} flex flex-col overflow-hidden`}>
+              <div className={`p-4 ${themed('border-b border-slate-700', 'border-b border-gray-200', 'border-b border-[#e4d8b4]')}`}>
                 <div className="flex items-center justify-between mb-3">
-                  <h2 className={`font-semibold ${darkMode ? 'text-white' : 'text-gray-900'}`}>Pages</h2>
+                  <h2 className={`font-semibold ${themed('text-white', 'text-gray-900', 'text-[#2d2a32]')}`}>Pages</h2>
                   <button
                     onClick={() => setShowArchived(!showArchived)}
-                    className={`text-xs px-2 py-1 rounded ${showArchived ? 'bg-orange-500/20 text-orange-400' : darkMode ? 'bg-slate-700 text-slate-300' : 'bg-gray-200'}`}
+                    className={`text-xs px-2 py-1 rounded ${showArchived ? 'bg-orange-500/20 text-orange-400' : themed('bg-slate-700 text-slate-300', 'bg-gray-200', 'bg-[#eadfb8] text-[#4a4534]')}`}
                   >
                     {showArchived ? 'Archived' : 'Active'}
                   </button>
                 </div>
                 <button
-                  onClick={() => setNewPageTitle('')}
+                  onClick={() => {
+                    setSelectedPage(null);
+                    setPageContent('');
+                    setEditingPageId(null);
+                    setHighlightType('none');
+                    setNumbered(false);
+                    setNewPageTitle('New Page');
+                  }}
                   className="w-full px-3 py-2 bg-purple-500 hover:bg-purple-600 text-white rounded text-sm flex items-center gap-2"
                 >
                   <Plus className="w-4 h-4" />
@@ -546,8 +644,8 @@ export default function InspireApp() {
                     onClick={() => selectPage(page)}
                     className={`w-full text-left px-3 py-2 rounded text-sm transition truncate ${
                       selectedPage === page.id
-                        ? darkMode ? 'bg-purple-500/20 text-purple-400' : 'bg-purple-100 text-purple-700'
-                        : darkMode ? 'hover:bg-slate-700 text-slate-300' : 'hover:bg-gray-200'
+                        ? themed('bg-purple-500/20 text-purple-400', 'bg-purple-100 text-purple-700', 'bg-[#e8dcaf] text-[#5c4b21]')
+                        : themed('hover:bg-slate-700 text-slate-300', 'hover:bg-gray-200', 'hover:bg-[#eadfb8] text-[#4a4534]')
                     }`}
                   >
                     {page.title || 'Untitled'}
@@ -560,55 +658,106 @@ export default function InspireApp() {
             <div className="flex-1 flex flex-col overflow-hidden">
               {selectedPage && currentPage ? (
                 <>
-                  <div className={`${darkMode ? 'bg-slate-800 border-b border-slate-700' : 'bg-white border-b border-gray-200'} px-6 py-4 flex items-center justify-between`}>
-                    <h2 className={`text-xl font-semibold ${darkMode ? 'text-white' : 'text-gray-900'}`}>{currentPage.title}</h2>
+                  <div className={`${themed('bg-slate-800 border-b border-slate-700', 'bg-white border-b border-gray-200', 'bg-[#f8f1d9] border-b border-[#e4d8b4]')} px-6 py-4 flex items-center justify-between`}>
+                    <div>
+                      <h2 className={`text-xl font-semibold ${themed('text-white', 'text-gray-900', 'text-[#2d2a32]')}`}>{currentPage.title}</h2>
+                      <p className={`text-xs ${themed('text-slate-400', 'text-gray-500', 'text-[#5c4b21]')}`}>Created on {currentPage.timestamp}</p>
+                    </div>
                     <div className="flex items-center gap-2">
                       <button
                         onClick={() => copyToClipboard(pageContent)}
-                        className={`p-2 rounded ${copied === 'content' ? 'bg-green-500/20 text-green-400' : darkMode ? 'hover:bg-slate-700 text-slate-400' : 'hover:bg-gray-200'}`}
+                        className={`p-2 rounded ${copied === 'content' ? 'bg-green-500/20 text-green-400' : themed('hover:bg-slate-700 text-slate-400', 'hover:bg-gray-200', 'hover:bg-[#eadfb8] text-[#4a4534]')}`}
                       >
                         {copied === 'content' ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
                       </button>
                       <button
                         onClick={() => toggleLike(selectedPage, currentPage.liked)}
-                        className={`p-2 rounded ${currentPage.liked ? 'text-red-500' : darkMode ? 'text-slate-400 hover:text-red-500' : 'text-gray-500 hover:text-red-500'}`}
+                        className={`p-2 rounded ${currentPage.liked ? 'text-red-500' : themed('text-slate-400 hover:text-red-500', 'text-gray-500 hover:text-red-500', 'text-[#4a4534] hover:text-red-500')}`}
                       >
                         <Heart className={`w-4 h-4 ${currentPage.liked ? 'fill-current' : ''}`} />
                       </button>
                       <button
                         onClick={() => archivePage(selectedPage, currentPage.archived)}
-                        className={`p-2 rounded ${currentPage.archived ? 'text-orange-500' : darkMode ? 'text-slate-400' : 'text-gray-500'}`}
+                        className={`p-2 rounded ${currentPage.archived ? 'text-orange-500' : themed('text-slate-400', 'text-gray-500', 'text-[#4a4534]')}`}
                       >
                         <Archive className="w-4 h-4" />
                       </button>
                       <button
                         onClick={() => deletePage(selectedPage)}
-                        className={`p-2 rounded ${darkMode ? 'hover:bg-red-500/10 text-red-400' : 'hover:bg-red-100 text-red-600'}`}
+                        className={`p-2 rounded ${themed('hover:bg-red-500/10 text-red-400', 'hover:bg-red-100 text-red-600', 'hover:bg-[#f4d0c8] text-[#8c1d18]')}`}
                       >
                         <Trash2 className="w-4 h-4" />
                       </button>
                     </div>
                   </div>
 
-                  <div className={`flex-1 overflow-hidden ${darkMode ? 'bg-slate-900' : 'bg-gray-50'} p-6`}>
+                  <div className={`flex items-center gap-2 px-6 py-3 ${themed('bg-slate-900 border-b border-slate-800', 'bg-gray-50 border-b border-gray-200', 'bg-[#fdf6e3] border-b border-[#e4d8b4]')}`}>
+                    <span className={`text-sm ${themed('text-slate-300', 'text-gray-700', 'text-[#5c4b21]')}`}>Highlight:</span>
+                    <button
+                      onClick={() => updateHighlight('todo')}
+                      className={`px-3 py-1 rounded text-sm ${highlightType === 'todo' ? 'bg-amber-500 text-white' : themed('bg-slate-800 text-amber-200', 'bg-amber-100 text-amber-900', 'bg-[#eadfb8] text-[#5c4b21]')}`}
+                    >
+                      Todo
+                    </button>
+                    <button
+                      onClick={() => updateHighlight('notTodo')}
+                      className={`px-3 py-1 rounded text-sm ${highlightType === 'notTodo' ? 'bg-green-600 text-white' : themed('bg-slate-800 text-green-200', 'bg-green-100 text-green-900', 'bg-[#e1f3df] text-[#1f3d2b]')}`}
+                    >
+                      Not Todo
+                    </button>
+                    <button
+                      onClick={() => updateHighlight('none')}
+                      className={`px-3 py-1 rounded text-sm ${highlightType === 'none' ? 'bg-purple-500 text-white' : themed('bg-slate-800 text-purple-200', 'bg-gray-200 text-gray-800', 'bg-[#f8f1d9] text-[#2d2a32]')}`}
+                    >
+                      Clear
+                    </button>
+                    <div className="flex items-center gap-2 ml-auto">
+                      <button
+                        onClick={toggleNumbering}
+                        className={`px-3 py-1 rounded text-sm ${numbered ? 'bg-blue-500 text-white' : themed('bg-slate-800 text-blue-200', 'bg-blue-100 text-blue-900', 'bg-[#e1ecf8] text-[#1f3d5b]')}`}
+                      >
+                        {numbered ? 'Disable Numbering' : 'Enable Numbering'}
+                      </button>
+                      <button
+                        onClick={() => setEditingPageId(selectedPage)}
+                        className={`px-3 py-1 rounded text-sm ${themed('bg-slate-800 text-slate-200 hover:bg-slate-700', 'bg-gray-200 hover:bg-gray-300', 'bg-[#eadfb8] text-[#2d2a32] hover:bg-[#e1d59d]')}`}
+                      >
+                        Edit Content
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className={`flex-1 overflow-hidden ${themed('bg-slate-900', 'bg-gray-50', 'bg-[#fdf6e3]')} p-6`}>
                     {editingPageId === selectedPage ? (
                       <textarea
                         value={pageContent}
                         onChange={(e) => setPageContent(e.target.value)}
-                        className={`w-full h-full px-4 py-3 rounded-lg border-2 resize-none focus:outline-none ${darkMode ? 'bg-slate-800 border-slate-700 text-white' : 'bg-white border-gray-300'}`}
+                        className={`w-full h-full px-4 py-3 rounded-lg border-2 resize-none focus:outline-none ${themed('bg-slate-800 border-slate-700 text-white', 'bg-white border-gray-300', 'bg-[#f8f1d9] border-[#e4d8b4] text-[#2d2a32]')}`}
                       />
                     ) : (
                       <div
                         onClick={() => setEditingPageId(selectedPage)}
-                        className={`w-full h-full px-4 py-3 rounded-lg border-2 border-dashed cursor-text overflow-y-auto ${darkMode ? 'bg-slate-800 border-slate-700 text-gray-300' : 'bg-white border-gray-300 text-gray-700'}`}
+                        className={`w-full h-full px-4 py-3 rounded-lg border-2 border-dashed cursor-text overflow-y-auto ${highlightClasses[highlightType]}`}
                       >
-                        {pageContent || 'Click to add content...'}
+                        {pageContent
+                          ? numbered
+                            ? (
+                                <ol className="list-decimal list-inside space-y-1">
+                                  {pageContent.split('\n').map((line, idx) => (
+                                    <li key={idx}>{line || '...'}</li>
+                                  ))}
+                                </ol>
+                              )
+                            : (
+                                <pre className="whitespace-pre-wrap font-sans leading-relaxed">{pageContent}</pre>
+                              )
+                          : 'Click to add content...'}
                       </div>
                     )}
                   </div>
 
                   {editingPageId === selectedPage && (
-                    <div className={`${darkMode ? 'bg-slate-800 border-t border-slate-700' : 'bg-white border-t border-gray-200'} px-6 py-3 flex gap-2`}>
+                    <div className={`${themed('bg-slate-800 border-t border-slate-700', 'bg-white border-t border-gray-200', 'bg-[#f8f1d9] border-t border-[#e4d8b4]')} px-6 py-3 flex gap-2`}>
                       <button
                         onClick={savePage}
                         className="px-4 py-2 bg-green-500 hover:bg-green-600 text-white rounded"
@@ -617,7 +766,7 @@ export default function InspireApp() {
                       </button>
                       <button
                         onClick={() => setEditingPageId(null)}
-                        className={`px-4 py-2 rounded ${darkMode ? 'bg-slate-700 hover:bg-slate-600' : 'bg-gray-200'}`}
+                        className={`px-4 py-2 rounded ${themed('bg-slate-700 hover:bg-slate-600', 'bg-gray-200', 'bg-[#eadfb8]')}`}
                       >
                         Cancel
                       </button>
@@ -625,20 +774,47 @@ export default function InspireApp() {
                   )}
                 </>
               ) : newPageTitle !== '' ? (
-                <div className={`flex-1 flex flex-col ${darkMode ? 'bg-slate-900' : 'bg-gray-50'} p-6`}>
+                <div className={`flex-1 flex flex-col ${themed('bg-slate-900', 'bg-gray-50', 'bg-[#fdf6e3]')} p-6`}>
                   <input
                     type="text"
                     placeholder="Page title"
                     value={newPageTitle}
                     onChange={(e) => setNewPageTitle(e.target.value)}
-                    className={`px-4 py-2 mb-4 rounded border-2 ${darkMode ? 'bg-slate-800 border-slate-700 text-white' : 'bg-white border-gray-300'}`}
+                    className={`px-4 py-2 mb-4 rounded border-2 ${themed('bg-slate-800 border-slate-700 text-white', 'bg-white border-gray-300', 'bg-[#f8f1d9] border-[#e4d8b4] text-[#2d2a32]')}`}
                   />
                   <textarea
                     placeholder="Start typing..."
                     value={pageContent}
                     onChange={(e) => setPageContent(e.target.value)}
-                    className={`flex-1 px-4 py-3 rounded-lg border-2 resize-none focus:outline-none ${darkMode ? 'bg-slate-800 border-slate-700 text-white' : 'bg-white border-gray-300'}`}
+                    className={`flex-1 px-4 py-3 rounded-lg border-2 resize-none focus:outline-none ${themed('bg-slate-800 border-slate-700 text-white', 'bg-white border-gray-300', 'bg-[#f8f1d9] border-[#e4d8b4] text-[#2d2a32]')}`}
                   />
+                  <div className="flex items-center gap-2 mt-4">
+                    <span className={`text-sm ${themed('text-slate-300', 'text-gray-700', 'text-[#5c4b21]')}`}>Highlight:</span>
+                    <button
+                      onClick={() => setHighlightType('todo')}
+                      className={`px-3 py-1 rounded text-sm ${highlightType === 'todo' ? 'bg-amber-500 text-white' : themed('bg-slate-800 text-amber-200', 'bg-amber-100 text-amber-900', 'bg-[#eadfb8] text-[#5c4b21]')}`}
+                    >
+                      Todo
+                    </button>
+                    <button
+                      onClick={() => setHighlightType('notTodo')}
+                      className={`px-3 py-1 rounded text-sm ${highlightType === 'notTodo' ? 'bg-green-600 text-white' : themed('bg-slate-800 text-green-200', 'bg-green-100 text-green-900', 'bg-[#e1f3df] text-[#1f3d2b]')}`}
+                    >
+                      Not Todo
+                    </button>
+                    <button
+                      onClick={() => setHighlightType('none')}
+                      className={`px-3 py-1 rounded text-sm ${highlightType === 'none' ? 'bg-purple-500 text-white' : themed('bg-slate-800 text-purple-200', 'bg-gray-200 text-gray-800', 'bg-[#f8f1d9] text-[#2d2a32]')}`}
+                    >
+                      Clear
+                    </button>
+                    <button
+                      onClick={() => setNumbered(!numbered)}
+                      className={`ml-auto px-3 py-1 rounded text-sm ${numbered ? 'bg-blue-500 text-white' : themed('bg-slate-800 text-blue-200', 'bg-blue-100 text-blue-900', 'bg-[#e1ecf8] text-[#1f3d5b]')}`}
+                    >
+                      {numbered ? 'Disable Numbering' : 'Enable Numbering'}
+                    </button>
+                  </div>
                   <div className="flex gap-2 mt-4">
                     <button
                       onClick={createPage}
@@ -647,22 +823,26 @@ export default function InspireApp() {
                       Create Page
                     </button>
                     <button
-                      onClick={() => setNewPageTitle('')}
-                      className={`px-4 py-2 rounded ${darkMode ? 'bg-slate-700 hover:bg-slate-600' : 'bg-gray-200'}`}
+                      onClick={() => {
+                        setNewPageTitle('');
+                        setHighlightType('none');
+                        setNumbered(false);
+                      }}
+                      className={`px-4 py-2 rounded ${themed('bg-slate-700 hover:bg-slate-600', 'bg-gray-200', 'bg-[#eadfb8]')}`}
                     >
                       Cancel
                     </button>
                   </div>
                 </div>
               ) : (
-                <div className={`flex-1 flex items-center justify-center ${darkMode ? 'bg-slate-900 text-slate-400' : 'bg-gray-50 text-gray-500'}`}>
+                <div className={`flex-1 flex items-center justify-center ${themed('bg-slate-900 text-slate-400', 'bg-gray-50 text-gray-500', 'bg-[#fdf6e3] text-[#5c4b21]')}`}>
                   <p>Select a page or create a new one</p>
                 </div>
               )}
             </div>
           </div>
         ) : (
-          <div className={`flex-1 flex items-center justify-center ${darkMode ? 'bg-slate-900 text-slate-400' : 'bg-gray-50 text-gray-500'}`}>
+          <div className={`flex-1 flex items-center justify-center ${themed('bg-slate-900 text-slate-400', 'bg-gray-50 text-gray-500', 'bg-[#fdf6e3] text-[#5c4b21]')}`}>
             <p>Create a notebook to get started</p>
           </div>
         )}
