@@ -229,6 +229,8 @@ export default function InspireApp() {
     setHighlightType(page.highlightType || 'none');
     setNumbered(!!page.numbered);
     setEditingPageId(null);
+    setRenamingPageId(null);
+    setRenamingPageTitle('');
   };
 
   // Save page content
@@ -491,7 +493,7 @@ export default function InspireApp() {
             {notebooks.map((nb) => (
               <div key={nb.id} className="group">
                 <button
-                  onClick={() => setSelectedNotebook(nb.id)}
+                  onClick={() => { setSelectedNotebook(nb.id); setRenamingNotebookId(null); setRenamingNotebookName(''); }}
                   className={`w-full text-left px-3 py-2 rounded flex items-center gap-2 transition ${
                     selectedNotebook === nb.id
                       ? themed('bg-purple-500/20 text-purple-400', 'bg-purple-100 text-purple-700', 'bg-[#e8dcaf] text-[#5c4b21]')
