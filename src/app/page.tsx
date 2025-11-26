@@ -1,25 +1,36 @@
 "use client"
-import React, { useState, useEffect } from 'react';
-import { Heart, LogOut, Settings, Sparkles, Copy, Check } from 'lucide-react';
+
+import React, { useState } from 'react';
+import { Heart, LogOut, Sparkles, Copy, Check } from 'lucide-react';
+
+interface User {
+  email: string;
+  id: string;
+}
+
+interface Note {
+  id: number;
+  text: string;
+  timestamp: string;
+  liked: boolean;
+}
 
 export default function InspireApp() {
-  const [user, setUser] = useState(null);
-  const [notes, setNotes] = useState([]);
+  const [user, setUser] = useState<User | null>(null);
+  const [notes, setNotes] = useState<Note[]>([]);
   const [newNote, setNewNote] = useState('');
-  const [editingId, setEditingId] = useState(null);
+  const [editingId, setEditingId] = useState<number | null>(null);
   const [editText, setEditText] = useState('');
-  const [copied, setCopied] = useState(null);
+  const [copied, setCopied] = useState<number | null>(null);
   const [darkMode, setDarkMode] = useState(true);
   const [showAuthForm, setShowAuthForm] = useState(false);
   const [authMode, setAuthMode] = useState('login');
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
-  const [userType] = useState(null);
 
-  // Simulate user authentication
   const handleAuth = () => {
     if (authEmail && authPassword) {
-      setUser({ email: authEmail, id: Math.random().toString() } as any);
+      setUser({ email: authEmail, id: Math.random().toString() });
       setAuthEmail('');
       setAuthPassword('');
       setShowAuthForm(false);
@@ -33,7 +44,7 @@ export default function InspireApp() {
 
   const addNote = () => {
     if (newNote.trim()) {
-      const note = {
+      const note: Note = {
         id: Date.now(),
         text: newNote,
         timestamp: new Date().toLocaleDateString(),
@@ -44,25 +55,25 @@ export default function InspireApp() {
     }
   };
 
-  const deleteNote = (id) => {
+  const deleteNote = (id: number) => {
     setNotes(notes.filter(n => n.id !== id));
   };
 
-  const toggleLike = (id) => {
+  const toggleLike = (id: number) => {
     setNotes(notes.map(n => n.id === id ? { ...n, liked: !n.liked } : n));
   };
 
-  const startEdit = (id, text) => {
+  const startEdit = (id: number, text: string) => {
     setEditingId(id);
     setEditText(text);
   };
 
-  const saveEdit = (id) => {
+  const saveEdit = (id: number) => {
     setNotes(notes.map(n => n.id === id ? { ...n, text: editText } : n));
     setEditingId(null);
   };
 
-  const copyToClipboard = (text, id) => {
+  const copyToClipboard = (text: string, id: number) => {
     navigator.clipboard.writeText(text);
     setCopied(id);
     setTimeout(() => setCopied(null), 2000);
@@ -177,7 +188,7 @@ export default function InspireApp() {
             onChange={(e) => setNewNote(e.target.value)}
             placeholder="What's inspiring you today? Write freely..."
             className={`w-full px-4 py-3 rounded-lg border-2 mb-4 resize-none focus:outline-none transition ${darkMode ? 'bg-slate-700 border-slate-600 text-white placeholder-slate-400 focus:border-purple-500' : 'bg-gray-100 border-gray-300 placeholder-gray-500 focus:border-purple-500'}`}
-            rows="4"
+            rows={4}
           />
           <button
             onClick={addNote}
@@ -207,7 +218,7 @@ export default function InspireApp() {
                       value={editText}
                       onChange={(e) => setEditText(e.target.value)}
                       className={`w-full px-4 py-3 rounded-lg border-2 mb-4 resize-none focus:outline-none ${darkMode ? 'bg-slate-700 border-slate-600 text-white' : 'bg-gray-100 border-gray-300'}`}
-                      rows="4"
+                      rows={4}
                     />
                     <div className="flex gap-2">
                       <button
