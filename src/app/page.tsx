@@ -18,8 +18,7 @@ import {
   onSnapshot,
   deleteDoc,
   doc,
-  updateDoc,
-  getDocs
+  updateDoc
 } from 'firebase/firestore';
 import { auth, db } from './firebase';
 
