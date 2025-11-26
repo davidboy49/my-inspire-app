@@ -14,11 +14,12 @@ export default function InspireApp() {
   const [authMode, setAuthMode] = useState('login');
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
+  const [userType] = useState(null);
 
   // Simulate user authentication
   const handleAuth = () => {
     if (authEmail && authPassword) {
-      setUser({ email: authEmail, id: Math.random() });
+      setUser({ email: authEmail, id: Math.random().toString() } as any);
       setAuthEmail('');
       setAuthPassword('');
       setShowAuthForm(false);
