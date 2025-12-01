@@ -1,10 +1,10 @@
 "use client"
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import Image from 'next/image';
 import { Heart, LogOut, Sparkles, Copy, Check, Loader, Plus, Archive, Trash2, Menu, X } from 'lucide-react';
-import { 
-  signInWithEmailAndPassword, 
+import {
+  signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
   signOut,
   onAuthStateChanged,
@@ -12,14 +12,15 @@ import {
   GoogleAuthProvider
 } from 'firebase/auth';
 import { 
-  collection, 
-  addDoc, 
-  query, 
-  where, 
+  collection,
+  addDoc,
+  query,
+  where,
   onSnapshot,
   deleteDoc,
   doc,
-  updateDoc
+  updateDoc,
+  setDoc
 } from 'firebase/firestore';
 import { auth, db } from './firebase';
 
@@ -51,6 +52,28 @@ interface Page {
   numbered?: boolean;
 }
 
+interface AdminUserProfile {
+  id: string;
+  email: string | null;
+  displayName: string;
+  photoURL?: string | null;
+  role?: 'admin' | 'user';
+  isActive?: boolean;
+  updatedAt?: string;
+}
+
+const ADMIN_EMAILS = ['admin@example.com'];
+
+const QUOTES = [
+  { text: 'The secret of getting ahead is getting started.', author: 'Mark Twain' },
+  { text: 'Well begun is half done.', author: 'Aristotle' },
+  { text: 'Action is the foundational key to all success.', author: 'Pablo Picasso' },
+  { text: 'Either write something worth reading or do something worth writing.', author: 'Benjamin Franklin' },
+  { text: 'You miss 100% of the shots you don’t take.', author: 'Wayne Gretzky' },
+  { text: 'What you do speaks so loudly that I cannot hear what you say.', author: 'Ralph Waldo Emerson' },
+  { text: 'An unexamined life is not worth living.', author: 'Socrates' }
+] as const;
+
 export default function InspireApp() {
   const [user, setUser] = useState<User | null>(null);
   const [notebooks, setNotebooks] = useState<Notebook[]>([]);
@@ -76,15 +99,24 @@ export default function InspireApp() {
   const [newNotebookName, setNewNotebookName] = useState('');
   const [showNewNotebook, setShowNewNotebook] = useState(false);
   const [newPageTitle, setNewPageTitle] = useState('');
+  const [isCreatingPage, setIsCreatingPage] = useState(false);
   const [pageContent, setPageContent] = useState('');
   const [editingPageId, setEditingPageId] = useState<string | null>(null);
   const [highlightType, setHighlightType] = useState<'todo' | 'notTodo' | 'none'>('none');
   const [numbered, setNumbered] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
+  const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
+  const lastSavedContentRef = useRef('');
+  const [quote, setQuote] = useState<{ text: string; author: string } | null>(null);
+  const [adminUsers, setAdminUsers] = useState<AdminUserProfile[]>([]);
+  const [userSearch, setUserSearch] = useState('');
 
   const colors = ['bg-blue-500', 'bg-purple-500', 'bg-pink-500', 'bg-green-500', 'bg-orange-500'];
   const [selectedColor, setSelectedColor] = useState(colors[0]);
+
+  const isAdmin = user && ADMIN_EMAILS.includes(user.email || '');
 
   // Load notebooks
   const loadNotebooks = useCallback((userId: string) => {
@@ -115,6 +147,19 @@ export default function InspireApp() {
           displayName: currentUser.displayName || (currentUser.email ? currentUser.email.split('@')[0] : 'Creator'),
           photoURL: currentUser.photoURL
         });
+        setDoc(
+          doc(db, 'users', currentUser.uid),
+          {
+            email: currentUser.email,
+            displayName:
+              currentUser.displayName || (currentUser.email ? currentUser.email.split('@')[0] : 'Creator'),
+            photoURL: currentUser.photoURL || null,
+            role: ADMIN_EMAILS.includes(currentUser.email || '') ? 'admin' : 'user',
+            isActive: true,
+            updatedAt: new Date().toISOString()
+          },
+          { merge: true }
+        );
         notebooksUnsubscribe?.();
         notebooksUnsubscribe = loadNotebooks(currentUser.uid);
       } else {
@@ -122,6 +167,7 @@ export default function InspireApp() {
         setUser(null);
         setNotebooks([]);
         setPages([]);
+        setAdminUsers([]);
       }
       setLoading(false);
     });
@@ -177,6 +223,32 @@ export default function InspireApp() {
     return () => clearInterval(interval);
   }, []);
 
+  useEffect(() => {
+    const randomQuote = QUOTES[Math.floor(Math.random() * QUOTES.length)];
+    setQuote(randomQuote);
+  }, []);
+
+  useEffect(() => {
+    if (!isAdmin) {
+      setAdminUsers([]);
+      return;
+    }
+
+    const usersQuery = query(collection(db, 'users'));
+    const unsubscribe = onSnapshot(usersQuery, (snapshot) => {
+      const users: AdminUserProfile[] = [];
+      snapshot.forEach((userDoc) => {
+        users.push({
+          id: userDoc.id,
+          ...userDoc.data()
+        } as AdminUserProfile);
+      });
+      setAdminUsers(users);
+    });
+
+    return () => unsubscribe();
+  }, [isAdmin]);
+
   const themed = (darkClass: string, lightClass: string, readerClass?: string) => {
     if (theme === 'dark') return darkClass;
     if (theme === 'reader') return readerClass || lightClass;
@@ -206,11 +278,13 @@ export default function InspireApp() {
 
   // Create page
   const createPage = async () => {
-    if (!newPageTitle.trim() || !selectedNotebook || !user) return;
+    if (!selectedNotebook || !user) return;
+
+    const title = newPageTitle.trim() || 'Untitled Page';
 
     try {
       const docRef = await addDoc(collection(db, 'pages'), {
-        title: newPageTitle,
+        title,
         content: pageContent,
         notebookId: selectedNotebook,
         userId: user.id,
@@ -222,6 +296,10 @@ export default function InspireApp() {
       });
       setNewPageTitle('');
       setPageContent('');
+      setIsCreatingPage(false);
+      lastSavedContentRef.current = pageContent;
+      setLastSavedAt(new Date().toLocaleTimeString());
+      setSaveStatus('saved');
       setSelectedPage(docRef.id);
       setEditingPageId(docRef.id);
     } catch (err) {
@@ -235,6 +313,10 @@ export default function InspireApp() {
     setPageContent(page.content);
     setHighlightType(page.highlightType || 'none');
     setNumbered(!!page.numbered);
+    setIsCreatingPage(false);
+    lastSavedContentRef.current = page.content;
+    setSaveStatus('idle');
+    setLastSavedAt(null);
     setEditingPageId(null);
     setRenamingPageId(null);
     setRenamingPageTitle('');
@@ -245,9 +327,13 @@ export default function InspireApp() {
     if (!selectedPage || !user) return;
 
     try {
+      setSaveStatus('saving');
       await updateDoc(doc(db, 'pages', selectedPage), {
         content: pageContent
       });
+      lastSavedContentRef.current = pageContent;
+      setLastSavedAt(new Date().toLocaleTimeString());
+      setSaveStatus('saved');
       setEditingPageId(null);
     } catch (err) {
       setErrorMessage(err);
@@ -293,6 +379,22 @@ export default function InspireApp() {
     }
   };
 
+  const updateUserRole = async (id: string, role: 'admin' | 'user') => {
+    try {
+      await updateDoc(doc(db, 'users', id), { role, updatedAt: new Date().toISOString() });
+    } catch (err) {
+      setErrorMessage(err);
+    }
+  };
+
+  const toggleUserActive = async (id: string, isActive: boolean | undefined) => {
+    try {
+      await updateDoc(doc(db, 'users', id), { isActive: !isActive, updatedAt: new Date().toISOString() });
+    } catch (err) {
+      setErrorMessage(err);
+    }
+  };
+
   const updateHighlight = async (type: 'todo' | 'notTodo' | 'none') => {
     if (!selectedPage) return;
     setHighlightType(type);
@@ -313,6 +415,26 @@ export default function InspireApp() {
       setErrorMessage(err);
     }
   };
+
+  useEffect(() => {
+    if (!selectedPage || editingPageId !== selectedPage || !user) return;
+    if (pageContent === lastSavedContentRef.current) return;
+
+    setSaveStatus('saving');
+    const handler = setTimeout(async () => {
+      try {
+        await updateDoc(doc(db, 'pages', selectedPage), { content: pageContent });
+        lastSavedContentRef.current = pageContent;
+        setLastSavedAt(new Date().toLocaleTimeString());
+        setSaveStatus('saved');
+      } catch (err) {
+        setErrorMessage(err);
+        setSaveStatus('idle');
+      }
+    }, 800);
+
+    return () => clearTimeout(handler);
+  }, [editingPageId, pageContent, selectedPage, user]);
 
   const renamePage = async () => {
     if (!renamingPageId || !renamingPageTitle.trim()) return;
@@ -639,6 +761,11 @@ export default function InspireApp() {
               <h1 className={`text-2xl font-bold ${themed('text-white', 'text-gray-900', 'text-[#2d2a32]')}`}>Inspire</h1>
               <p className={`text-sm ${themed('text-slate-400', 'text-gray-500', 'text-[#5c4b21]')}`}>Welcome back, {user.displayName}</p>
               <p className={`text-xs ${themed('text-slate-500', 'text-gray-400', 'text-[#7a6f4b]')}`}>{khTime} (UTC+7)</p>
+              {quote && (
+                <p className={`text-xs italic mt-1 ${themed('text-purple-200', 'text-purple-700', 'text-[#5c4b21]')}`}>
+                  “{quote.text}” — {quote.author}
+                </p>
+              )}
             </div>
           </div>
           <div className="flex items-center gap-3">
@@ -677,6 +804,88 @@ export default function InspireApp() {
           </div>
         </header>
 
+        {isAdmin && (
+          <div className={`px-6 py-4 border-b ${themed('border-slate-800 bg-slate-900', 'border-gray-200 bg-white', 'border-[#e4d8b4] bg-[#fdf6e3]')}`}>
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <p className={`text-xs uppercase tracking-wide ${themed('text-slate-400', 'text-gray-500', 'text-[#5c4b21]')}`}>Admin Console</p>
+                <h2 className={`text-lg font-semibold ${themed('text-white', 'text-gray-900', 'text-[#2d2a32]')}`}>User management</h2>
+              </div>
+              <div className="flex gap-2 items-center">
+                <input
+                  type="text"
+                  value={userSearch}
+                  onChange={(e) => setUserSearch(e.target.value)}
+                  placeholder="Search users"
+                  className={`px-3 py-2 rounded border text-sm ${themed('bg-slate-800 border-slate-700 text-white', 'bg-white border-gray-300', 'bg-[#f8f1d9] border-[#e4d8b4] text-[#2d2a32]')}`}
+                />
+                <span className={`text-xs px-3 py-2 rounded ${themed('bg-slate-800 text-slate-200', 'bg-gray-100 text-gray-700', 'bg-[#eadfb8] text-[#2d2a32]')}`}>
+                  {adminUsers.length} users
+                </span>
+              </div>
+            </div>
+            <div className={`rounded-lg border ${themed('border-slate-800 bg-slate-900', 'border-gray-200 bg-gray-50', 'border-[#e4d8b4] bg-[#f8f1d9]')} overflow-hidden`}>
+              <div className={`grid grid-cols-5 gap-2 px-4 py-2 text-xs font-semibold ${themed('bg-slate-800 text-slate-200', 'bg-gray-100 text-gray-700', 'bg-[#eadfb8] text-[#2d2a32]')}`}>
+                <span>User</span>
+                <span>Email</span>
+                <span>Status</span>
+                <span>Role</span>
+                <span className="text-right">Actions</span>
+              </div>
+              <div className="divide-y divide-gray-200/50">
+                {adminUsers
+                  .filter((u) =>
+                    [u.displayName, u.email].some((value) => value?.toLowerCase().includes(userSearch.toLowerCase()))
+                  )
+                  .map((u) => (
+                    <div
+                      key={u.id}
+                      className={`grid grid-cols-5 gap-2 px-4 py-3 text-sm ${themed('text-slate-200', 'text-gray-700', 'text-[#2d2a32]')}`}
+                    >
+                      <div className="flex items-center gap-2">
+                        {u.photoURL ? (
+                          <Image src={u.photoURL} alt={u.displayName} width={28} height={28} className="rounded-full" />
+                        ) : (
+                          <div className="w-7 h-7 rounded-full bg-purple-500/20 text-purple-500 flex items-center justify-center text-xs font-bold">
+                            {(u.displayName || 'U').charAt(0).toUpperCase()}
+                          </div>
+                        )}
+                        <span className="font-medium truncate">{u.displayName}</span>
+                      </div>
+                      <span className="truncate">{u.email}</span>
+                      <span
+                        className={`inline-flex items-center px-2 py-1 rounded text-xs w-fit ${
+                          u.isActive
+                            ? themed('bg-green-900/40 text-green-200', 'bg-green-100 text-green-800', 'bg-[#e1f3df] text-[#1f3d2b]')
+                            : themed('bg-red-900/30 text-red-200', 'bg-red-100 text-red-800', 'bg-[#f4d0c8] text-[#8c1d18]')
+                        }`}
+                      >
+                        {u.isActive ? 'Active' : 'Disabled'}
+                      </span>
+                      <span className={`text-xs px-2 py-1 rounded ${themed('bg-slate-800 text-slate-200', 'bg-gray-200 text-gray-800', 'bg-[#eadfb8] text-[#2d2a32]')}`}>
+                        {u.role || 'user'}
+                      </span>
+                      <div className="flex items-center justify-end gap-2">
+                        <button
+                          onClick={() => toggleUserActive(u.id, u.isActive)}
+                          className={`px-3 py-1 rounded text-xs ${themed('bg-slate-800 hover:bg-slate-700 text-white', 'bg-gray-200 hover:bg-gray-300', 'bg-[#eadfb8] hover:bg-[#e1d59d]')}`}
+                        >
+                          {u.isActive ? 'Disable' : 'Enable'}
+                        </button>
+                        <button
+                          onClick={() => updateUserRole(u.id, u.role === 'admin' ? 'user' : 'admin')}
+                          className="px-3 py-1 rounded text-xs bg-purple-500 hover:bg-purple-600 text-white"
+                        >
+                          Set {u.role === 'admin' ? 'User' : 'Admin'}
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+              </div>
+            </div>
+          </div>
+        )}
+
         {selectedNotebook ? (
           <div className="flex-1 flex overflow-hidden">
             {/* Pages List - Middle */}
@@ -698,7 +907,11 @@ export default function InspireApp() {
                     setEditingPageId(null);
                     setHighlightType('none');
                     setNumbered(false);
-                    setNewPageTitle('New Page');
+                    setNewPageTitle('');
+                    setSaveStatus('idle');
+                    setLastSavedAt(null);
+                    setIsCreatingPage(true);
+                    lastSavedContentRef.current = '';
                   }}
                   className="w-full px-3 py-2 bg-purple-500 hover:bg-purple-600 text-white rounded text-sm flex items-center gap-2"
                 >
@@ -791,32 +1004,46 @@ export default function InspireApp() {
                     </div>
                   </div>
 
-                  <div className={`flex items-center gap-2 px-6 py-3 ${themed('bg-slate-900 border-b border-slate-800', 'bg-gray-50 border-b border-gray-200', 'bg-[#fdf6e3] border-b border-[#e4d8b4]')}`}>
-                    <span className={`text-sm ${themed('text-slate-300', 'text-gray-700', 'text-[#5c4b21]')}`}>Highlight:</span>
+                <div className={`flex items-center gap-2 px-6 py-3 ${themed('bg-slate-900 border-b border-slate-800', 'bg-gray-50 border-b border-gray-200', 'bg-[#fdf6e3] border-b border-[#e4d8b4]')}`}>
+                  <span className={`text-sm ${themed('text-slate-300', 'text-gray-700', 'text-[#5c4b21]')}`}>Highlight:</span>
+                  <button
+                    onClick={() => updateHighlight('todo')}
+                    className={`px-3 py-1 rounded text-sm ${highlightType === 'todo' ? 'bg-amber-500 text-white' : themed('bg-slate-800 text-amber-200', 'bg-amber-100 text-amber-900', 'bg-[#eadfb8] text-[#5c4b21]')}`}
+                  >
+                    Todo
+                  </button>
+                  <button
+                    onClick={() => updateHighlight('notTodo')}
+                    className={`px-3 py-1 rounded text-sm ${highlightType === 'notTodo' ? 'bg-green-600 text-white' : themed('bg-slate-800 text-green-200', 'bg-green-100 text-green-900', 'bg-[#e1f3df] text-[#1f3d2b]')}`}
+                  >
+                    Not Todo
+                  </button>
+                  <button
+                    onClick={() => updateHighlight('none')}
+                    className={`px-3 py-1 rounded text-sm ${highlightType === 'none' ? 'bg-purple-500 text-white' : themed('bg-slate-800 text-purple-200', 'bg-gray-200 text-gray-800', 'bg-[#f8f1d9] text-[#2d2a32]')}`}
+                  >
+                    Clear
+                  </button>
+                  <div className="flex items-center gap-3 ml-auto">
+                    <div className={`flex items-center gap-2 text-xs px-3 py-1 rounded ${themed('bg-slate-800 text-slate-200', 'bg-gray-200 text-gray-800', 'bg-[#eadfb8] text-[#2d2a32]')}`}>
+                      {saveStatus === 'saving' ? (
+                        <Loader className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <Check className="w-4 h-4" />
+                      )}
+                      <span>
+                        {saveStatus === 'saving'
+                          ? 'Saving...'
+                          : lastSavedAt
+                            ? `Saved ${lastSavedAt}`
+                            : 'Auto-save ready'}
+                      </span>
+                    </div>
                     <button
-                      onClick={() => updateHighlight('todo')}
-                      className={`px-3 py-1 rounded text-sm ${highlightType === 'todo' ? 'bg-amber-500 text-white' : themed('bg-slate-800 text-amber-200', 'bg-amber-100 text-amber-900', 'bg-[#eadfb8] text-[#5c4b21]')}`}
+                      onClick={toggleNumbering}
+                      className={`px-3 py-1 rounded text-sm ${numbered ? 'bg-blue-500 text-white' : themed('bg-slate-800 text-blue-200', 'bg-blue-100 text-blue-900', 'bg-[#e1ecf8] text-[#1f3d5b]')}`}
                     >
-                      Todo
-                    </button>
-                    <button
-                      onClick={() => updateHighlight('notTodo')}
-                      className={`px-3 py-1 rounded text-sm ${highlightType === 'notTodo' ? 'bg-green-600 text-white' : themed('bg-slate-800 text-green-200', 'bg-green-100 text-green-900', 'bg-[#e1f3df] text-[#1f3d2b]')}`}
-                    >
-                      Not Todo
-                    </button>
-                    <button
-                      onClick={() => updateHighlight('none')}
-                      className={`px-3 py-1 rounded text-sm ${highlightType === 'none' ? 'bg-purple-500 text-white' : themed('bg-slate-800 text-purple-200', 'bg-gray-200 text-gray-800', 'bg-[#f8f1d9] text-[#2d2a32]')}`}
-                    >
-                      Clear
-                    </button>
-                    <div className="flex items-center gap-2 ml-auto">
-                      <button
-                        onClick={toggleNumbering}
-                        className={`px-3 py-1 rounded text-sm ${numbered ? 'bg-blue-500 text-white' : themed('bg-slate-800 text-blue-200', 'bg-blue-100 text-blue-900', 'bg-[#e1ecf8] text-[#1f3d5b]')}`}
-                      >
-                        {numbered ? 'Disable Numbering' : 'Enable Numbering'}
+                      {numbered ? 'Disable Numbering' : 'Enable Numbering'}
                       </button>
                       <button
                         onClick={() => setEditingPageId(selectedPage)}
@@ -873,7 +1100,7 @@ export default function InspireApp() {
                     </div>
                   )}
                 </>
-              ) : newPageTitle !== '' ? (
+              ) : isCreatingPage ? (
                 <div className={`flex-1 flex flex-col ${themed('bg-slate-900', 'bg-gray-50', 'bg-[#fdf6e3]')} p-6`}>
                   <input
                     type="text"
@@ -927,6 +1154,8 @@ export default function InspireApp() {
                         setNewPageTitle('');
                         setHighlightType('none');
                         setNumbered(false);
+                        setIsCreatingPage(false);
+                        setPageContent('');
                       }}
                       className={`px-4 py-2 rounded ${themed('bg-slate-700 hover:bg-slate-600', 'bg-gray-200', 'bg-[#eadfb8]')}`}
                     >
