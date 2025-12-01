@@ -51,6 +51,16 @@ interface Page {
   numbered?: boolean;
 }
 
+const QUOTES = [
+  { text: 'The secret of getting ahead is getting started.', author: 'Mark Twain' },
+  { text: 'Well begun is half done.', author: 'Aristotle' },
+  { text: 'Action is the foundational key to all success.', author: 'Pablo Picasso' },
+  { text: 'Either write something worth reading or do something worth writing.', author: 'Benjamin Franklin' },
+  { text: 'You miss 100% of the shots you don’t take.', author: 'Wayne Gretzky' },
+  { text: 'What you do speaks so loudly that I cannot hear what you say.', author: 'Ralph Waldo Emerson' },
+  { text: 'An unexamined life is not worth living.', author: 'Socrates' }
+] as const;
+
 export default function InspireApp() {
   const [user, setUser] = useState<User | null>(null);
   const [notebooks, setNotebooks] = useState<Notebook[]>([]);
@@ -76,6 +86,7 @@ export default function InspireApp() {
   const [newNotebookName, setNewNotebookName] = useState('');
   const [showNewNotebook, setShowNewNotebook] = useState(false);
   const [newPageTitle, setNewPageTitle] = useState('');
+  const [isCreatingPage, setIsCreatingPage] = useState(false);
   const [pageContent, setPageContent] = useState('');
   const [editingPageId, setEditingPageId] = useState<string | null>(null);
   const [highlightType, setHighlightType] = useState<'todo' | 'notTodo' | 'none'>('none');
@@ -85,6 +96,7 @@ export default function InspireApp() {
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
   const lastSavedContentRef = useRef('');
+  const [quote, setQuote] = useState<{ text: string; author: string } | null>(null);
 
   const colors = ['bg-blue-500', 'bg-purple-500', 'bg-pink-500', 'bg-green-500', 'bg-orange-500'];
   const [selectedColor, setSelectedColor] = useState(colors[0]);
@@ -180,6 +192,11 @@ export default function InspireApp() {
     return () => clearInterval(interval);
   }, []);
 
+  useEffect(() => {
+    const randomQuote = QUOTES[Math.floor(Math.random() * QUOTES.length)];
+    setQuote(randomQuote);
+  }, []);
+
   const themed = (darkClass: string, lightClass: string, readerClass?: string) => {
     if (theme === 'dark') return darkClass;
     if (theme === 'reader') return readerClass || lightClass;
@@ -227,6 +244,7 @@ export default function InspireApp() {
       });
       setNewPageTitle('');
       setPageContent('');
+      setIsCreatingPage(false);
       lastSavedContentRef.current = pageContent;
       setLastSavedAt(new Date().toLocaleTimeString());
       setSaveStatus('saved');
@@ -243,6 +261,7 @@ export default function InspireApp() {
     setPageContent(page.content);
     setHighlightType(page.highlightType || 'none');
     setNumbered(!!page.numbered);
+    setIsCreatingPage(false);
     lastSavedContentRef.current = page.content;
     setSaveStatus('idle');
     setLastSavedAt(null);
@@ -674,6 +693,11 @@ export default function InspireApp() {
               <h1 className={`text-2xl font-bold ${themed('text-white', 'text-gray-900', 'text-[#2d2a32]')}`}>Inspire</h1>
               <p className={`text-sm ${themed('text-slate-400', 'text-gray-500', 'text-[#5c4b21]')}`}>Welcome back, {user.displayName}</p>
               <p className={`text-xs ${themed('text-slate-500', 'text-gray-400', 'text-[#7a6f4b]')}`}>{khTime} (UTC+7)</p>
+              {quote && (
+                <p className={`text-xs italic mt-1 ${themed('text-purple-200', 'text-purple-700', 'text-[#5c4b21]')}`}>
+                  “{quote.text}” — {quote.author}
+                </p>
+              )}
             </div>
           </div>
           <div className="flex items-center gap-3">
@@ -733,9 +757,10 @@ export default function InspireApp() {
                     setEditingPageId(null);
                     setHighlightType('none');
                     setNumbered(false);
-                    setNewPageTitle('New Page');
+                    setNewPageTitle('');
                     setSaveStatus('idle');
                     setLastSavedAt(null);
+                    setIsCreatingPage(true);
                     lastSavedContentRef.current = '';
                   }}
                   className="w-full px-3 py-2 bg-purple-500 hover:bg-purple-600 text-white rounded text-sm flex items-center gap-2"
@@ -925,7 +950,7 @@ export default function InspireApp() {
                     </div>
                   )}
                 </>
-              ) : newPageTitle !== '' ? (
+              ) : isCreatingPage ? (
                 <div className={`flex-1 flex flex-col ${themed('bg-slate-900', 'bg-gray-50', 'bg-[#fdf6e3]')} p-6`}>
                   <input
                     type="text"
@@ -979,6 +1004,8 @@ export default function InspireApp() {
                         setNewPageTitle('');
                         setHighlightType('none');
                         setNumbered(false);
+                        setIsCreatingPage(false);
+                        setPageContent('');
                       }}
                       className={`px-4 py-2 rounded ${themed('bg-slate-700 hover:bg-slate-600', 'bg-gray-200', 'bg-[#eadfb8]')}`}
                     >
