@@ -122,17 +122,23 @@ export default function InspireApp() {
   const loadNotebooks = useCallback((userId: string) => {
     const q = query(collection(db, 'notebooks'), where('userId', '==', userId));
 
-    return onSnapshot(q, (snapshot) => {
-      const loadedNotebooks: Notebook[] = [];
-      snapshot.forEach((doc) => {
-        loadedNotebooks.push({
-          id: doc.id,
-          ...doc.data()
-        } as Notebook);
-      });
-      setNotebooks(loadedNotebooks);
-      setSelectedNotebook((current) => current || loadedNotebooks[0]?.id || null);
-    });
+    return onSnapshot(
+      q,
+      (snapshot) => {
+        const loadedNotebooks: Notebook[] = [];
+        snapshot.forEach((doc) => {
+          loadedNotebooks.push({
+            id: doc.id,
+            ...doc.data()
+          } as Notebook);
+        });
+        setNotebooks(loadedNotebooks);
+        setSelectedNotebook((current) => current || loadedNotebooks[0]?.id || null);
+      },
+      (err) => {
+        setErrorMessage(err);
+      }
+    );
   }, []);
 
   // Auth state listener
@@ -187,22 +193,28 @@ export default function InspireApp() {
         where('userId', '==', user.id)
       );
       
-      const unsubscribe = onSnapshot(q, (snapshot) => {
-        const loadedPages: Page[] = [];
-        snapshot.forEach((doc) => {
-          loadedPages.push({
-            id: doc.id,
-            ...doc.data()
-          } as Page);
-        });
-        setPages(loadedPages.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()));
-        if (selectedPage && !loadedPages.find(p => p.id === selectedPage)) {
-          setSelectedPage(null);
-          setPageContent('');
-          setHighlightType('none');
-          setNumbered(false);
+      const unsubscribe = onSnapshot(
+        q,
+        (snapshot) => {
+          const loadedPages: Page[] = [];
+          snapshot.forEach((doc) => {
+            loadedPages.push({
+              id: doc.id,
+              ...doc.data()
+            } as Page);
+          });
+          setPages(loadedPages.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()));
+          if (selectedPage && !loadedPages.find(p => p.id === selectedPage)) {
+            setSelectedPage(null);
+            setPageContent('');
+            setHighlightType('none');
+            setNumbered(false);
+          }
+        },
+        (err) => {
+          setErrorMessage(err);
         }
-      });
+      );
 
       return () => unsubscribe();
     }
@@ -235,16 +247,22 @@ export default function InspireApp() {
     }
 
     const usersQuery = query(collection(db, 'users'));
-    const unsubscribe = onSnapshot(usersQuery, (snapshot) => {
-      const users: AdminUserProfile[] = [];
-      snapshot.forEach((userDoc) => {
-        users.push({
-          id: userDoc.id,
-          ...userDoc.data()
-        } as AdminUserProfile);
-      });
-      setAdminUsers(users);
-    });
+    const unsubscribe = onSnapshot(
+      usersQuery,
+      (snapshot) => {
+        const users: AdminUserProfile[] = [];
+        snapshot.forEach((userDoc) => {
+          users.push({
+            id: userDoc.id,
+            ...userDoc.data()
+          } as AdminUserProfile);
+        });
+        setAdminUsers(users);
+      },
+      (err) => {
+        setErrorMessage(err);
+      }
+    );
 
     return () => unsubscribe();
   }, [isAdmin]);
@@ -264,7 +282,7 @@ export default function InspireApp() {
 
     try {
       await addDoc(collection(db, 'notebooks'), {
-        name: newNotebookName,
+        name: newNotebookName.trim(),
         userId: user.id,
         createdAt: new Date().toLocaleDateString(),
         color: selectedColor
